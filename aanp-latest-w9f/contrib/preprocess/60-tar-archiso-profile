@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+## tar_archiso_profile :: tar :: archiso :: Profile
+
+#
+## Initialization :: Variables :: Dynamic
+
+# Variable modification :: Script :: Short name
+readonly sr_script_sn="$(basename "${BASH_SOURCE[0]}")"
+
+# Variable modification :: Script :: Resolved absolute path name
+readonly sr_script_rapn="$(dirname "$(realpath "${BASH_SOURCE[0]}")")"
+
+#
+## Main :: Phase 0
+
+# Action :: Compress archiso profile directory :: aanp
+tar --exclude '*/*.tmpl' -zcf "$sr_script_rapn/../http/artifact/aanp.tar.gz" -C "$sr_script_rapn/../archiso" aanp || {
+        # Notify :: Execution failure
+        printf '%s\n' "FAIL :: tar :: $sr_script_rapn/../archiso :: aanp :: $sr_script_rapn/../http/artifact/aanp.tar.gz :: $sr_script_sn/$LINENO"
+
+        # Action :: Exit ungracefully
+        exit 1
+    }

@@ -1,0 +1,29 @@
+#!/usr/bin/env bash
+## provisioner_validate :: Provisioner :: Validate
+
+#
+## Initialize :: Variables :: Static
+
+# Variable modification :: Validation file
+readonly pv_vf='/root/provisioning.done'
+
+# Variable modification :: Loop start
+pv_ls='0'
+
+# Variable modification :: Time limit (seconds)
+pv_tl='900'
+
+#
+## Main :: Phase 0 // Loop until validation file exists OR time limit has exceeded
+
+# Loop :: While testing existence validation file
+while [[ ! -f "$pv_vf" ]]; do
+    # Counter :: Increase with +1
+    ((pv_ls++))
+
+    # Validate :: If time limit exceeds predefined value, break out of loop
+    ((pv_ls == pv_tl)) && { break; }
+
+    # Action :: Sleep
+    sleep 1
+done

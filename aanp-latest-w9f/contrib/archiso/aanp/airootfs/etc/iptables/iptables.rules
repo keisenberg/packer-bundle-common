@@ -1,0 +1,11 @@
+*filter
+:INPUT DROP [0:0]
+:FORWARD DROP [0:0]
+:OUTPUT ACCEPT [0:0]
+--append INPUT --match conntrack --ctstate RELATED,ESTABLISHED --jump ACCEPT
+--append INPUT --in-interface lo --jump ACCEPT
+--append INPUT --protocol icmp --match icmp --icmp-type 8 --match conntrack --ctstate NEW --jump ACCEPT
+--append INPUT --protocol tcp --jump REJECT --reject-with tcp-reset
+--append INPUT --protocol udp --jump REJECT --reject-with icmp-port-unreachable
+--append INPUT --jump REJECT --reject-with icmp-proto-unreachable
+COMMIT

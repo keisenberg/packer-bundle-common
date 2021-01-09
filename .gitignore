@@ -1,0 +1,6 @@
+aanp-*/contrib/archiso/aanp/airootfs/etc/fwknop/access.conf
+aanp-*/contrib/archiso/aanp/airootfs/root/.ssh/authorized_keys
+aanp-*/contrib/http/artifact/aanp.tar.gz
+aanp-*/contrib/http/automated_script/aanp-latest-*-efi
+centos-*/contrib/http/kickstart/centos-*.cfg
+*/output

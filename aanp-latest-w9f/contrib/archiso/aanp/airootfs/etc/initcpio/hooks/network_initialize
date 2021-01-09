@@ -1,0 +1,149 @@
+#!/bin/ash
+#
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+run_hook () {
+    # Validate :: Interactive analysis mode
+    if [[ "${network_initialize_analysis_mode:-NULL}" == 'true' ]] || [[ "${network_initialize_analysis_mode_run_hook_primary:-NULL}" == 'true' ]]; then
+        # Functon :: launch_interactive_shell
+        launch_interactive_shell
+    fi
+
+    # Validate :: Debug mode
+    if [[ "${initramfs_debug:-NULL}" == 'true' ]]; then
+        # Notify :: Attach new protocol address to network device
+        echo ":: running hook [network_initialize] :: Attach new protocol address to network device :: eth0 :: ${ipv4_address}/${ipv4_netmask}"
+    fi
+
+    # Action :: ip :: address add
+    ip address add "${ipv4_address}/${ipv4_netmask}" dev eth0
+
+    # Validate :: Debug mode
+    if [[ "${initramfs_debug:-NULL}" == 'true' ]]; then
+        # Notify :: Change network device attribute
+        echo ":: running hook [network_initialize] :: Change network device attribute :: eth0 :: up"
+    fi
+
+    # Action :: ip :: link set
+    ip link set eth0 up
+
+    # Validate :: Interactive analysis mode
+    if [[ "${network_initialize_analysis_mode_run_hook_secondary:-NULL}" == 'true' ]]; then
+        # Functon :: launch_interactive_shell
+        launch_interactive_shell
+    fi
+
+    # Validate :: IPv4 gateway on local connection
+    if ! ip route get "${ipv4_gateway}" &>/dev/null; then
+        # Validate :: Debug mode
+        if [[ "${initramfs_debug:-NULL}" == 'true' ]]; then
+            # Notify :: Add new route :: Gateway
+            echo ":: running hook [network_initialize] :: Add new route :: gateway :: ${ipv4_gateway}/${ipv4_netmask} :: eth0"
+        fi
+
+        # Action :: ip :: Route add
+        ip route add "${ipv4_gateway}" dev eth0
+    fi
+
+    # Validate :: Interactive analysis mode
+    if [[ "${network_initialize_analysis_mode_run_hook_tertiary:-NULL}" == 'true' ]]; then
+        # Functon :: launch_interactive_shell
+        launch_interactive_shell
+    fi
+
+    # Validate :: Debug mode
+    if [[ "${initramfs_debug:-NULL}" == 'true' ]]; then
+        # Notify :: Add new route :: Default
+        echo ":: running hook [network_initialize] :: Add new route :: default :: ${ipv4_gateway} :: eth0"
+    fi
+
+    # Action :: ip :: Route add
+    ip route add default via "${ipv4_gateway}" dev eth0
+
+    # Validate :: Interactive analysis mode
+    if [[ "${network_initialize_analysis_mode_run_hook_quaternary:-NULL}" == 'true' ]]; then
+        # Functon :: launch_interactive_shell
+        launch_interactive_shell
+    fi
+
+    # Validate :: Variable :: Primary nameserver
+    if [[ "${ipv4_nameserver_primary}" ]]; then
+        # Validate :: Debug mode
+        if [[ "${initramfs_debug:-NULL}" == 'true' ]]; then
+            # Notify :: Resolver routine :: Populate configuration file
+            echo ":: running hook [network_initialize] :: Resolver routine :: Populate configuration file :: /etc/resolv.conf"
+        fi
+
+        # Action :: Populate resolver configuration
+        echo "nameserver ${ipv4_nameserver_primary}" > /etc/resolv.conf
+
+        # Validate :: Variable :: Secondary nameserver
+        if [[ "${ipv4_nameserver_secondary}" ]]; then
+            # Action :: Populate resolver configuration
+            echo "nameserver ${ipv4_nameserver_secondary}" >> /etc/resolv.conf
+        fi
+    fi
+
+    # Validate :: Interactive analysis mode
+    if [[ "${network_initialize_analysis_mode_run_hook_quinary:-NULL}" == 'true' ]]; then
+        # Functon :: launch_interactive_shell
+        launch_interactive_shell
+    fi
+
+    # Validate :: Network connectivity :: Primary
+    if ! ping -c 2 -q 1.1.1.1 &>/dev/null; then
+        # Validate :: Network connectivity :: Secondary
+        if ! ping -c 5 -q 8.8.8.8 &>/dev/null; then
+            # Validate :: Network connectivity :: Tertiary
+            if ! ping -c 10 -q 8.8.4.4 &>/dev/null; then
+                # Notify :: FAIL :: Validate :: Network connectivity
+                echo ":: running hook [network_initialize] :: FAIL :: Validate :: Network connectivity"
+
+                # Action :: Populate resolver configuration
+                sleep 5
+
+                # Action :: Reboot
+                echo '1' > /proc/sys/kernel/sysrq
+                echo 'b' > /proc/sysrq-trigger
+            else
+                # Validate :: Debug mode
+                if [[ "${initramfs_debug:-NULL}" == 'true' ]]; then
+                    # Notify :: Network connectivity :: Successfully validated
+                    echo ":: running hook [network_initialize] :: Network connectivity :: Successfully validated"
+                fi
+            fi
+        else
+            # Validate :: Debug mode
+            if [[ "${initramfs_debug:-NULL}" == 'true' ]]; then
+                # Notify :: Network connectivity :: Successfully validated
+                echo ":: running hook [network_initialize] :: Network connectivity :: Successfully validated"
+            fi
+        fi
+    else
+        # Validate :: Debug mode
+        if [[ "${initramfs_debug:-NULL}" == 'true' ]]; then
+            # Notify :: Network connectivity :: Successfully validated
+            echo ":: running hook [network_initialize] :: Network connectivity :: Successfully validated"
+        fi
+    fi
+
+    # Validate :: Interactive analysis mode
+    if [[ "${network_initialize_analysis_mode_run_hook_senary:-NULL}" == 'true' ]]; then
+        # Functon :: launch_interactive_shell
+        launch_interactive_shell
+    fi
+}
+
+run_latehook () {
+    # Validate :: Variable :: Secondary nameserver
+    if [[ -f /etc/resolv.conf ]]; then
+        # Validate :: Debug mode
+        if [[ "${initramfs_debug:-NULL}" == 'true' ]]; then
+            # Notify :: Resolver routine :: Populate configuration file
+            echo ":: running hook [network_initialize] :: Resolver routine :: Populate configuration file :: /new_root/etc/resolv.conf"
+        fi
+
+        # Action :: Populate resolver configuration
+        cp /etc/resolv.conf /new_root/etc/resolv.conf
+    fi
+}

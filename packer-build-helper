@@ -1,0 +1,86 @@
+#!/usr/bin/env bash
+## packer-build-helper :: Packer build helper
+
+#
+## Initialization :: Variables :: Dynamic
+
+# Variable modification :: Script :: Short name
+readonly sr_script_sn="$(basename "${BASH_SOURCE[0]}")"
+
+# Variable modification :: Script :: Resolved absolute path name
+readonly sr_script_rapn="$(dirname "$(realpath "${BASH_SOURCE[0]}")")"
+
+#
+## Preprocess :: Phase 0 // Validate input
+
+# Validate :: Input variable :: Build reference
+if [[ -n "$1" ]]; then
+    # Variable modification :: Build reference
+    readonly sr_br="$1"
+else
+    # Notify :: Validation failure
+    printf '%s\n' "FAIL :: Input missing :: \$1 :: Build reference :: $sr_script_sn/$LINENO"
+
+    # Action :: Exit ungracefully
+    exit 1
+fi
+
+# Validate :: Directory existence :: Build reference
+if [[ ! -d "$sr_script_rapn/$sr_br" ]]; then
+    # Notify :: Validation failure
+    printf '%s\n' "FAIL :: Directory missing :: Build reference :: $sr_script_rapn/$sr_br :: $sr_script_sn/$LINENO"
+
+    # Action :: Exit ungracefully
+    exit 1
+fi
+
+#
+## Preprocess :: Phase 1 // Validate required conditions
+
+# Validate :: Preprocessing :: Task existence
+if [[ -n "$(find "$sr_script_rapn/$sr_br/contrib/preprocess" -maxdepth 1 -regex '^.*/[0-9]\{2\}-.*$' -type f 2>/dev/null)" ]]; then
+    # Variable modification :: Build reference :: Preprocessing tasks :: Existence
+    readonly sr_br_pt_existence='true'
+fi
+
+#
+## Main :: Phase 0 // Run build specific preprocessing tasks
+
+# Validate :: Existence preprocessing tasks
+if [[ "$sr_br_pt_existence" == 'true' ]]; then
+    # Loop :: Execute preprocessing tasks :: Lexicographical order
+    while IFS= read -r -d '' sr_build_preprocessing_task; do
+        # Action :: Execute preprocessing task
+        "$sr_build_preprocessing_task" || {
+            # Notify :: Action failure
+            printf '%s\n' "FAIL :: Execute :: Preprocessing task :: $sr_build_preprocessing_task :: $sr_script_sn/$LINENO"
+
+            # Action :: Exit ungracefully
+            exit 1
+        }
+
+        # Variable modification :: sr_build_preprocessing_task
+        unset sr_build_preprocessing_task
+    done < <(find "$sr_script_rapn/$sr_br/contrib/preprocess" -maxdepth 1 -regex '^.*/[0-9]\{2\}-.*$' -type f -print0)
+fi
+
+#
+## Main :: Phase 1 // Build artifact(s)
+
+# Action :: Open required build application(s) :: VMware Fusion
+open -a 'VMware Fusion' -g -j
+
+# Action :: Subshell
+(
+    # Action :: Change directory :: Build reference root folder
+    cd "$sr_script_rapn/$sr_br" || {
+        # Notify :: Action failure
+        printf '%s\n' "FAIL :: cd :: $sr_script_rapn/$sr_br :: $sr_script_sn/$LINENO"
+
+        # Action :: Exit ungracefully
+        exit 1
+    }
+
+    # Action :: Packer :: Build image(s) from template
+    PACKER_CACHE_DIR="$HOME/.cache/packer_cache" packer build .
+)

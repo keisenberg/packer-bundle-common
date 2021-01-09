@@ -1,0 +1,150 @@
+#!/usr/bin/env bash
+## aanp-latest-w9f-efi :: Automated script :: aanp :: latest :: w9f :: EFI
+
+#
+## Initialization :: Phase 0
+
+# Fail-safe :: Return value of a pipeline is the value of the last (rightmost) command to exit with a non-zero status, or zero if all commands in the pipeline exit successfully
+set -o pipefail
+
+# Fail-safe :: Treat unset variables and parameters other than the special parameters ‘@’ or ‘*’ as an error when performing parameter expansion. An error message will be written to the standard error, and a non-interactive shell will exit
+set -u
+
+#
+## Initialize :: Variables :: Static
+
+# Variable modification :: Loop start :: systemd validation :: pacman-init
+sr_ls_sv_pacman_init='0'
+
+# Variable modification :: Time limit (seconds) :: systemd validation :: pacman-init
+sr_tl_sv_pacman_init='120'
+
+#
+## Initialization :: Functions :: Static
+
+# Function modification :: Automated script :: Kernel cmdline helper
+as_kch() {
+    for param in $(cat /proc/cmdline); do
+        case "${param}" in
+        "$1"=*)
+            echo "${param##*=}"
+            return 0
+            ;;
+        "$1") return 0 ;;
+        *) continue ;;
+        esac
+    done
+    [ -n "${2}" ] && echo "${2}"
+    return 1
+}
+
+#
+## Preprocess :: Phase 0
+
+# Validate :: Existence kernel parameter
+if [[ -z "$(as_kch url_base)" ]]; then
+    # Action :: Halt gracefully
+    halt --halt --poweroff
+fi
+
+#
+## Preprocess :: Phase 1
+
+# Loop :: While testing existence validation file
+while ! systemctl --no-block status pacman-init | grep --quiet 'Active: active (exited)'; do
+    # Counter :: Increase with +1
+    ((sr_ls_sv_pacman_init++))
+
+    # Validate :: If time limit exceeds predefined value, break out of loop
+    ((sr_ls_sv_pacman_init == sr_tl_sv_pacman_init)) && { halt --halt --poweroff; }
+
+    # Action :: Sleep
+    sleep 1
+done
+
+# Action :: Synchronise local clock
+timedatectl set-ntp true || { halt --halt --poweroff; }
+
+#
+## Preprocess :: Phase 2
+
+# Fetch :: Provisioner validator
+curl --output /root/provisioner_validate "$(as_kch url_base)/artifact/provisioner_validate" || { halt --halt --poweroff; }
+
+# File modification :: Provisioner validate script
+chmod --verbose 0755 /root/provisioner_validate || { halt --halt --poweroff; }
+
+#
+## Preprocess :: Phase 3
+
+# Directory modification :: Create personal OpenSSH directory
+mkdir --parents --verbose /root/.ssh || { halt --halt --poweroff; }
+chmod --verbose 0700 /root/.ssh || { halt --halt --poweroff; }
+
+# File modification :: Create OpenSSH authorized keys file
+printf '%s\n' "$(base64 --decode <<< "@@secret_obfuscated_openssh_pk_be@@")" > /root/.ssh/id_ed25519 || { halt --halt --poweroff; }
+chmod --verbose 0400 /root/.ssh/id_ed25519 || { halt --halt --poweroff; }
+
+# File modification :: Create OpenSSH authorized keys file
+printf '%s\n' "@@secret_al_openssh_pk@@" > /root/.ssh/authorized_keys || { halt --halt --poweroff; }
+
+# systemd modification :: Start OpenSSH service
+systemctl start sshd.service || { halt --halt --poweroff; }
+
+# Action :: Scan OpenSSH key of storage node
+ssh-keyscan obfuscated.domain.tld > /root/.ssh/known_hosts || { halt --halt --poweroff; }
+
+#
+## Main :: Phase 0
+
+# Action :: Refresh Pacman cache
+pacman --noconfirm --refresh --sync
+# || { halt --halt --poweroff; }
+
+# Action :: Refresh Pacman cache
+pacman --noconfirm --sync archiso
+
+# Validate :: Succesfull package installation
+if ! pacman --query archiso; then
+    # Action :: Halt gracefully
+    halt --halt --poweroff
+fi
+
+#
+## Main :: Phase 1
+
+# Directory modification :: Create mkarchiso workspace
+mkdir --parents --verbose /root/mkarchiso/aanp{-input,-output,-work} || { halt --halt --poweroff; }
+
+# Fetch :: mkarchiso profile
+curl --output /root/mkarchiso/aanp-input/aanp.tar.gz "$(as_kch url_base)/artifact/aanp.tar.gz" || { halt --halt --poweroff; }
+
+# Extract :: mkarchiso profile
+tar -C /root/mkarchiso -zxvf /root/mkarchiso/aanp-input/aanp.tar.gz || { halt --halt --poweroff; }
+
+#
+## Main :: Phase 2
+
+# Action :: Create ISO
+mkarchiso -o /root/mkarchiso/aanp-output -w /root/mkarchiso/aanp-work -v /root/mkarchiso/aanp
+
+# Validate :: Existence created ISO
+if [[ ! -f "/root/mkarchiso/aanp-output/aanp-latest-x86_64.iso" ]]; then
+    # Action :: Halt gracefully
+    halt --halt --poweroff
+fi
+
+#
+## Postprocess :: Phase 0
+
+# Action :: Remove previous remote ISO artifact
+sftp -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null obfuscated@obfuscated.domain.tld <<< $'rm iso-vps-f9b/aanp-latest-x86_64.iso' || { halt --halt --poweroff; }
+
+# Action :: Upload ISO artifact to storage node
+scp -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null /root/mkarchiso/aanp-output/aanp-latest-x86_64.iso obfuscated@obfuscated.domain.tld:iso-vps-f9b/aanp-latest-x86_64.iso || { halt --halt --poweroff; }
+
+#
+## Postprocess :: Phase 1
+
+# File modification :: Provisioner validation file
+touch /root/provisioning.done || { halt --halt --poweroff; }

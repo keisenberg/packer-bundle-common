@@ -1,0 +1,269 @@
+# centos-8-stream-b6g-efi.cfg :: Kickstart configuration :: CentOS :: 8 :: Stream :: b6g :: EFI // svc.vps.domain.tld
+
+#
+## Preprocess :: Phase 0
+
+# Define :: Installation mode
+text --non-interactive
+
+# Define :: Do not configure X on installed system
+skipx
+
+# Define :: System authentication options
+auth --enableshadow --passalgo='sha512'
+
+# Define :: Remote server installation tree
+url --url='https://mirror.ams1.nl.leaseweb.net/centos/8-stream/BaseOS/x86_64/os'
+
+# Define :: Additional YUM repositories that may be used as sources for package installation
+repo --baseurl='https://mirror.ams1.nl.leaseweb.net/centos/8-stream/AppStream/x86_64/os' --name='centos-8-stream-appstream'
+repo --baseurl='https://mirror.ams1.nl.leaseweb.net/centos/8-stream/extras/x86_64/os'    --name='centos-8-stream-extras'
+repo --baseurl='https://mirror.ams1.nl.leaseweb.net/epel/8/Everything/x86_64'            --name='epel-8-everything'
+repo --baseurl='https://mirror.ams1.nl.leaseweb.net/epel/8/Modular/x86_64'               --name='epel-8-modular'
+
+# Define :: System keyboard type
+keyboard --vckeymap='us' --xlayouts='us'
+# Define :: Language used during installation
+lang en_US.UTF-8
+
+# Define :: System network information
+network --activate --bootproto='dhcp' --device='link' --noipv6
+network --hostname='centos-8-stream-b6g-efi.svc.vps.domain.tld'
+
+# Define :: System root password
+rootpw --iscrypted '@@secret_user_root_crypted@@'
+
+# Define :: System timezone
+timezone Etc/UTC --isUtc --ntpservers='0.pool.ntp.org,1.pool.ntp.org,2.pool.ntp.org,3.pool.ntp.org'
+
+#
+## Preprocess :: Phase 1
+
+# Action :: Initialize any detected invalid partition tables
+zerombr
+
+# Action :: Erase all partitions from drive :: /dev/sda
+clearpart --all --disklabel='gpt' --drives='sda' --initlabel
+
+# Action :: Create system partitions (according to baselined layout)
+part /boot/efi         --fsoptions='shortname=winnt,umask=0077' --fstype='vfat'  --label='efi'  --ondisk='sda' --size='128'
+part /boot                                                      --fstype='xfs'   --label='boot' --ondisk='sda' --size='1024'
+part pv.00 --encrypted --fsoptions='errors=remount-ro' --grow   --fstype='lvmpv'                --ondisk='sda' --passphrase='@@secret_luks_ek@@' --pbkdf='pbkdf2'
+
+# Action :: Create LVM group
+volgroup default pv.00
+
+# Action :: Create LVM volumes
+logvol /                                              --fstype='xfs'  --label='root' --name='root' --percent='66' --vgname='default'
+logvol /home --fsoptions='nouser,nodev,exec,nosuid'   --fstype='xfs'  --label='home' --name='home' --percent='4'  --vgname='default'
+logvol /tmp  --fsoptions='nouser,nodev,noexec,nosuid' --fstype='xfs'  --label='tmp'  --name='tmp'  --percent='10' --vgname='default'
+logvol /var  --fsoptions='nouser,nodev,noexec,nosuid' --fstype='xfs'  --label='var'  --name='var'  --percent='8' --vgname='default'
+logvol swap  --fsoptions='nouser'                     --fstype='swap' --label='swap' --name='swap' --percent='12' --vgname='default'
+
+# Define :: System bootloader configuration
+bootloader --append=' crashkernel=auto' --boot-drive='sda' --iscrypted --password='@@secret_bootloader_grub2_crypted@@' --timeout='5'
+
+#
+## Preprocess :: Phase 2
+
+# Action :: Add emergency user
+user --gecos='Obfuscated Obfuscated' --groups='wheel' --iscrypted --name='obfuscated' --password='@@secret_user_obfuscated_crypted@@'
+
+# Define :: Divergent firewall rules
+firewall --remove-service 'cockpit,dhcpv6-client'
+
+#
+## Main :: Phase 0 // Package installation
+
+# Action :: Begin Kickstart by commencing package installation
+%packages
+-dracut-config-rescue
+-iwl*-firmware
+ansible
+epel-release
+git
+open-vm-tools
+python3-dnf-plugin-versionlock
+qemu-guest-agent
+yum-utils
+%end
+
+#
+## Main :: Phase 1 // Kickstart add-ons
+
+# Activate:  Kdump add-on
+%addon com_redhat_kdump --disable
+%end
+
+#
+## Main :: Phase 2 // Additional installation options
+
+# Define :: System password policy
+%anaconda
+    pwpolicy root --minlen=6 --minquality=1 --notstrict --nochanges --notempty
+    pwpolicy user --minlen=6 --minquality=1 --notstrict --nochanges --emptyok
+    pwpolicy luks --minlen=6 --minquality=1 --notstrict --nochanges --notempty
+%end
+
+#
+## Postprocess :: Phase 0
+
+# Action :: Post installation :: /bin/bash :: Chrooted // Ensure LUKS partition can be decrypted unattended during first build boot
+%post --interpreter=/bin/bash
+    # File modification :: /root/luks.secret
+    printf %s '@@secret_luks_ek@@' > /root/luks.secret
+
+    # File modification :: /root/luks.key
+    head /dev/urandom -c 512 | tee /root/luks.key > /dev/null
+    chmod --verbose 0400 /root/luks.key
+
+    # Action :: Add temporary key to encrypted device :: /dev/sda3
+    cryptsetup --key-file /root/luks.secret --pbkdf pbkdf2 --verbose luksAddKey /dev/sda3 /root/luks.key
+
+    # File modification :: /etc/crypttab
+    sed --in-place --expression='s/none/\/root\/luks.key/g' /etc/crypttab
+
+    # File modification :: /root/luks.secret
+    rm --force --verbose /root/luks.secret
+
+    # File modification :: /etc/dracut.conf.d/05-luks-key.conf
+    printf '%s\n' 'install_items+=" /root/luks.key"' > /etc/dracut.conf.d/05-luks-key.conf
+%end
+
+# Action :: Post installation :: /bin/bash :: Chrooted // Ensure OpenSSH is configured for usage during initrd stage
+%post --interpreter=/bin/bash
+    # Action :: Create OpenSSH host key :: ed25519
+    /usr/libexec/openssh/sshd-keygen ed25519
+
+    # File modification :: /etc/ssh/dracut_ssh_host_key
+    mv /etc/ssh/ssh_host_ed25519_key /etc/ssh/dracut_ssh_host_key
+    chcon --type=sshd_key_t --user=system_u /etc/ssh/dracut_ssh_host_key
+
+    # File modification :: /etc/ssh/dracut_ssh_host_key.pub
+    mv /etc/ssh/ssh_host_ed25519_key.pub /etc/ssh/dracut_ssh_host_key.pub
+    chcon --type=sshd_key_t --user=system_u /etc/ssh/dracut_ssh_host_key.pub
+
+    # Variable modification :: Dracut :: OpenSSH :: Configuration
+    ks_dracut_openssh_configuration='QWNjZXB0RW52IExBTkcgTEFOR1VBR0UgTENfQUREUkVTUyBMQ19BTEwgTENfQ09MTEFURSBMQ19DVFlQRSBMQ19JREVOVElGSUNBVElPTgpBY2NlcHRFbnYgTENfTUVBU1VSRU1FTlQgTENfTUVTU0FHRVMgTENfTU9ORVRBUlkgTENfTkFNRSBMQ19OVU1FUklDCkFjY2VwdEVudiBMQ19QQVBFUiBMQ19URUxFUEhPTkUgTENfVElNRQoKQXV0aGVudGljYXRpb25NZXRob2RzICAgICAgICAgICBwdWJsaWNrZXkKQXV0aG9yaXplZEtleXNGaWxlICAgICAgICAgICAgICAuc3NoL2F1dGhvcml6ZWRfa2V5cwpIb3N0S2V5ICAgICAgICAgICAgICAgICAgICAgICAgIC9ldGMvc3NoL3NzaF9ob3N0X2tleQpQZXJtaXRSb290TG9naW4gICAgICAgICAgICAgICAgIGZvcmNlZC1jb21tYW5kcy1vbmx5ClN5c2xvZ0ZhY2lsaXR5ICAgICAgICAgICAgICAgICAgQVVUSFBSSVYKVXNlUEFNICAgICAgICAgICAgICAgICAgICAgICAgICBubwpYMTFGb3J3YXJkaW5nICAgICAgICAgICAgICAgICAgIG5vCg=='
+
+    # File modification :: /etc/ssh/dracut_sshd_config
+    base64 --decode <<< "$ks_dracut_openssh_configuration" > /etc/ssh/dracut_sshd_config
+    chcon --type=etc_t --user=system_u /etc/ssh/dracut_sshd_config
+%end
+
+# Action :: Post installation :: /bin/bash :: Chrooted // Ensure key based root login is possible during initrd stage
+%post --interpreter=/bin/bash
+    # Directory modification :: /root/.ssh
+    mkdir --verbose /root/.ssh
+    chmod --verbose 0700 /root/.ssh
+
+    # File modification :: /root/.ssh/dracut_authorized_keys
+    printf '%s\n' 'command="/usr/bin/systemd-tty-ask-password-agent" ssh-ed25519 <obfuscated>' > /root/.ssh/dracut_authorized_keys
+    chmod --verbose 0600 /root/.ssh/dracut_authorized_keys
+%end
+
+# Action :: Post installation :: /bin/bash :: Chrooted // Ensure OpenSSH is initialized and used during initrd stage
+%post --interpreter=/bin/bash
+    # Directory modification :: /lib/dracut/modules.d/46openssh
+    mkdir --parents --verbose /lib/dracut/modules.d/46openssh
+
+    # Variable modification :: Dracut :: OpenSSH :: systemd service unit
+    ks_dracut_openssh_ssu='W1VuaXRdCkRlc2NyaXB0aW9uPU9wZW5TU0ggc2VydmVyIGRhZW1vbgpEb2N1bWVudGF0aW9uPW1hbjpzc2hkKDgpIG1hbjpzc2hkX2NvbmZpZyg1KQpEZWZhdWx0RGVwZW5kZW5jaWVzPW5vCkJlZm9yZT1jcnlwdHNldHVwLnRhcmdldAoKW1NlcnZpY2VdCiMgV2l0aCBgVHlwZT1ub3RpZnlgIHRoZSBzc2hkIHNlcnZpY2UgaXMgc3RhcnRlZCBpbiBhIHJlbGlhYmxlCiMgYW5kIHJvYnVzdCB3YXkgYnV0IGl0IHJlcXVpcmVzIGFuIHNzaGQgd2l0aCBzeXN0ZW1kIHN1cHBvcnQuCiMgRmVkb3JhL1JIRUwvQ2VudE9TL0RlYmlhbi9VYnVudHUgcHJvdmlkZSBzdWNoIGFuIHNzaGQuCiMKIyBPbiBkaXN0cmlidXRpb25zIHN1Y2ggYXMgR2VudG9vLCBzc2hkIGRvZXNuJ3QgY29tZSB3aXRoCiMgc3lzdGVtZCBzdXBwb3J0LCB0aHVzLCBvbmUgaGFzIHRvIHNldCBgVHlwZT1zaW1wbGVgIHRoZXJlLgpUeXBlPW5vdGlmeQoKRW52aXJvbm1lbnRGaWxlPS0vZXRjL2NyeXB0by1wb2xpY2llcy9iYWNrLWVuZHMvb3BlbnNzaHNlcnZlci5jb25maWcKRW52aXJvbm1lbnRGaWxlPS0vZXRjL2NyeXB0by1wb2xpY2llcy9iYWNrLWVuZHMvb3BlbnNzaC1zZXJ2ZXIuY29uZmlnCkVudmlyb25tZW50RmlsZT0tL2V0Yy9zeXNjb25maWcvc3NoZApFbnZpcm9ubWVudEZpbGU9LS9ldGMvc3lzY29uZmlnL3NzaApFbnZpcm9ubWVudEZpbGU9LS9ldGMvc3lzY29uZmlnL2RyYWN1dC1zc2hkCgojIFN0YXJ0IGNvbW1hbmQgcmVxdWlyZXMgdGhlIGAtZWAgb3B0aW9uIGlmIGFuZCBvbmx5IGlmIGBUeXBlPXNpbXBsZWAKIyBpcyBjb25maWd1cmVkLCBzZWUgYWJvdmUuCkV4ZWNTdGFydD0vdXNyL3NiaW4vc3NoZCAtRCAkU1NIRF9PUFRTICRPUFRJT05TICRDUllQVE9fUE9MSUNZCgpFeGVjUmVsb2FkPS9iaW4va2lsbCAtSFVQICRNQUlOUElECktpbGxNb2RlPXByb2Nlc3MKUmVzdGFydD1vbi1mYWlsdXJlClJlc3RhcnRTZWM9NDJzCgpbSW5zdGFsbF0KV2FudGVkQnk9c3lzaW5pdC50YXJnZXQK'
+
+    # File modification :: /lib/dracut/modules.d/46openssh/sshd_config
+    base64 --decode <<< "$ks_dracut_openssh_ssu" > /lib/dracut/modules.d/46openssh/sshd.service
+    chcon --type=systemd_unit_file_t --user=system_u /lib/dracut/modules.d/46openssh/sshd.service
+
+    # Variable modification :: Dracut :: OpenSSH :: Module setup
+    ks_dracut_openssh_ms='IyEvYmluL2Jhc2gKCiMgMjAxOCwgR2VvcmcgU2F1dGhvZmYgPG1haWxAZ21zLnRmPgojIFNQRFgtTGljZW5zZS1JZGVudGlmaWVyOiBHUEwtMy4wLW9yLWxhdGVyCgojIGNhbGxlZCBieSBkcmFjdXQKY2hlY2soKSB7CiAgICByZXF1aXJlX2JpbmFyaWVzIHNzaGQgfHwgcmV0dXJuIDEKICAgICMgMCBlbmFibGVzIGJ5IGRlZmF1bHQsIDI1NSBvbmx5IG9uIHJlcXVlc3QKICAgIHJldHVybiAwCn0KCiMgY2FsbGVkIGJ5IGRyYWN1dApkZXBlbmRzKCkgewogICAgcmV0dXJuIDAKfQoKIyBjYWxsZWQgYnkgZHJhY3V0Cmluc3RhbGwoKSB7CiAgICBpZiBbICEgLXIgL2V0Yy9zc2gvZHJhY3V0X3NzaF9ob3N0X2tleS5wdWIgXTsgdGhlbgogICAgICAgIGRmYXRhbCAiTm8gaG9zdCBwdWJsaWMga2V5IGZvdW5kISIKICAgICAgICByZXR1cm4gMQogICAgZmkKICAgIGlmIFsgISAtciAvZXRjL3NzaC9kcmFjdXRfc3NoX2hvc3Rfa2V5IF07IHRoZW4KICAgICAgICBkZmF0YWwgIk5vIGhvc3QgcHJpdmF0ZSBrZXkgZm91bmQhIgogICAgICAgIHJldHVybiAxCiAgICBmaQoKICAgIGluc3Rfc2ltcGxlIC9ldGMvc3NoL2RyYWN1dF9zc2hfaG9zdF9rZXkucHViIC9ldGMvc3NoL3NzaF9ob3N0X2tleS5wdWIKICAgIC91c3IvYmluL2luc3RhbGwgLW0gNjAwIC9ldGMvc3NoL2RyYWN1dF9zc2hfaG9zdF9rZXkgIiRpbml0ZGlyL2V0Yy9zc2gvc3NoX2hvc3Rfa2V5IgoKICAgIGlmIFsgISAtciAvcm9vdC8uc3NoL2RyYWN1dF9hdXRob3JpemVkX2tleXMgXTsgdGhlbgogICAgICAgIGRmYXRhbCAiTm8gYXV0aG9yaXplZF9rZXlzIGZvciByb290IHVzZXIgZm91bmQhIgogICAgICAgIHJldHVybiAxCiAgICBmaQoKICAgIG1rZGlyIC1wIC1tIDA3MDAgIiRpbml0ZGlyL3Jvb3QiCiAgICBta2RpciAtcCAtbSAwNzAwICIkaW5pdGRpci9yb290Ly5zc2giCiAgICAvdXNyL2Jpbi9pbnN0YWxsIC1tIDYwMCAvcm9vdC8uc3NoL2RyYWN1dF9hdXRob3JpemVkX2tleXMgIiRpbml0ZGlyL3Jvb3QvLnNzaC9hdXRob3JpemVkX2tleXMiCgogICAgaW5zdF9iaW5hcnkgL3Vzci9zYmluL3NzaGQKICAgIGluc3RfbXVsdGlwbGUgLW8gL2V0Yy9zeXNjb25maWcvc3NoZCAvZXRjL3N5c2NvbmZpZy9zc2ggL2V0Yy9zeXNjb25maWcvZHJhY3V0LXNzaGQKCiAgICAjIEZpcnN0IGVudHJ5IGZvciBGZWRvcmEgMjgsIHNlY29uZCBmb3IgRmVkb3JhIDI3CiAgICBpbnN0X211bHRpcGxlIC1vIC9ldGMvY3J5cHRvLXBvbGljaWVzL2JhY2stZW5kcy9vcGVuc3Noc2VydmVyLmNvbmZpZwogICAgaW5zdF9zaW1wbGUgIiR7bW9kZGlyfS9zc2hkLnNlcnZpY2UiICIkc3lzdGVtZHN5c3RlbXVuaXRkaXIvc3NoZC5zZXJ2aWNlIgogICAgaW5zdF9zaW1wbGUgL2V0Yy9zc2gvZHJhY3V0X3NzaGRfY29uZmlnIC9ldGMvc3NoL3NzaGRfY29uZmlnCgogICAgZ3JlcCAnXnNzaGQ6JyAvZXRjL3Bhc3N3ZCA+PiAiJGluaXRkaXIvZXRjL3Bhc3N3ZCIKICAgIGdyZXAgJ15zc2hkOicgL2V0Yy9ncm91cCAgPj4gIiRpbml0ZGlyL2V0Yy9ncm91cCIKCiAgICBpZiBbIC1kIC92YXIvZW1wdHkvc3NoZCBdOyB0aGVuCiAgICAgICAgbWtkaXIgLXAgLW0gMDc1NSAiJGluaXRkaXIvdmFyL2VtcHR5L3NzaGQiCiAgICBmaQoKICAgIHN5c3RlbWN0bCAtcSAtLXJvb3QgIiRpbml0ZGlyIiBlbmFibGUgc3NoZAoKICAgICMgc3NoZCByZXF1aXJlcyAvdmFyL2xvZy9sYXN0bG9nIGZvciB0cmFja2luZyBsb2dpbiBpbmZvcm1hdGlvbgogICAgbWtkaXIgLXAgLW0gMDc1NSAiJGluaXRkaXIvdmFyL2xvZyIKICAgIHRvdWNoICIkaW5pdGRpci92YXIvbG9nL2xhc3Rsb2ciCgogICAgcmV0dXJuIDAKfQo='
+
+    # File modification :: /lib/dracut/modules.d/46openssh/module-setup.sh
+    base64 --decode <<< "$ks_dracut_openssh_ms" > /lib/dracut/modules.d/46openssh/module-setup.sh
+    chmod --verbose 0755 /lib/dracut/modules.d/46openssh/module-setup.sh
+    chcon --type=bin_t --user=system_u /lib/dracut/modules.d/46openssh/module-setup.sh
+%end
+
+# Action :: Post installation :: /bin/bash :: Chrooted // Configure GRUB2 stage and regenerate initrd
+%post --interpreter=/bin/bash
+    # Action :: Manage the GRUB environment block :: Edit parameter :: kernelopts
+    grub2-editenv --verbose - set "$(grub2-editenv - list | grep kernelopts)ip=dhcp ipv6.disable=1 rd.neednet=1"
+
+    # Action :: dracut :: Regenerate all initramfs images at the default location with the kernel versions found on the system
+    dracut --force --regenerate-all --verbose
+%end
+
+# Action :: Post installation :: /bin/bash :: Chrooted // Cleanup artifacts required for first time initrd generation
+%post --interpreter=/bin/bash
+    # File modification :: /etc/dracut.conf.d/05-luks-key.conf
+    rm --force --verbose /etc/dracut.conf.d/05-luks-key.conf
+
+    # File modification :: /etc/crypttab
+    sed --in-place --expression='s/\/root\/luks.key/none/g' /etc/crypttab
+
+    # File modification :: /root/luks.key
+    rm --force --verbose /root/luks.key
+%end
+
+# Action :: Post installation :: /bin/bash :: Chrooted // Ensure key based emergency login is possible
+%post --interpreter=/bin/bash
+    # Directory modification :: /home/obfuscated/.ssh
+    mkdir --verbose /home/obfuscated/.ssh
+    chmod --verbose 0700 /home/obfuscated/.ssh
+    chown --verbose obfuscated: /home/obfuscated/.ssh
+
+    # File modification :: /root/.ssh/authorized_keys
+    printf '%s\n' 'ssh-ed25519 <obfuscated>' > /home/obfuscated/.ssh/authorized_keys
+    chmod --verbose 0600 /home/obfuscated/.ssh/authorized_keys
+    chown --verbose obfuscated: /home/obfuscated/.ssh/authorized_keys
+
+    # Action :: Allow emergency user passwordless privilige escalation
+    printf '%s\n' 'obfuscated ALL=(ALL) NOPASSWD: ALL' > /etc/sudoers.d/10-obfuscated
+%end
+
+# Action :: Post installation :: /bin/bash :: Chrooted // Cleanup artifacts left by dnf usage
+%post --interpreter=/bin/bash
+    # Action :: dnf :: Cleanup temporary files kept for repositories
+    dnf clean all
+%end
+
+# Action :: Post installation :: /bin/bash // Post provisioning tweaks
+%post --interpreter=/bin/bash --nochroot
+    # Variable modification :: PAM :: login
+    ks_pam_login='IyVQQU0tMS4wCmF1dGggICAgICAgW3VzZXJfdW5rbm93bj1pZ25vcmUgc3VjY2Vzcz1vayBpZ25vcmU9aWdub3JlIGRlZmF1bHQ9YmFkXSBwYW1fc2VjdXJldHR5LnNvCmF1dGggICAgICAgc3Vic3RhY2sgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICBzeXN0ZW0tYXV0aAphdXRoICAgICAgIGluY2x1ZGUgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgcG9zdGxvZ2luCmFjY291bnQgICAgcmVxdWlyZWQgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICBwYW1fbm9sb2dpbi5zbwphY2NvdW50ICAgIGluY2x1ZGUgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgc3lzdGVtLWF1dGgKcGFzc3dvcmQgICBpbmNsdWRlICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgIHN5c3RlbS1hdXRoCiMgcGFtX3NlbGludXguc28gY2xvc2Ugc2hvdWxkIGJlIHRoZSBmaXJzdCBzZXNzaW9uIHJ1bGUKc2Vzc2lvbiAgICByZXF1aXJlZCAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgIHBhbV9zZWxpbnV4LnNvIGNsb3NlCnNlc3Npb24gICAgcmVxdWlyZWQgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICBwYW1fbG9naW51aWQuc28Kc2Vzc2lvbiAgICBvcHRpb25hbCAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgIHBhbV9jb25zb2xlLnNvCiMgcGFtX3NlbGludXguc28gb3BlbiBzaG91bGQgb25seSBiZSBmb2xsb3dlZCBieSBzZXNzaW9ucyB0byBiZSBleGVjdXRlZCBpbiB0aGUgdXNlciBjb250ZXh0CnNlc3Npb24gICAgcmVxdWlyZWQgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICBwYW1fc2VsaW51eC5zbyBvcGVuCnNlc3Npb24gICAgcmVxdWlyZWQgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICBwYW1fbmFtZXNwYWNlLnNvCnNlc3Npb24gICAgb3B0aW9uYWwgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICBwYW1fa2V5aW5pdC5zbyBmb3JjZSByZXZva2UKc2Vzc2lvbiAgICBpbmNsdWRlICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgIHN5c3RlbS1hdXRoCnNlc3Npb24gICAgaW5jbHVkZSAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICBwb3N0bG9naW4KLXNlc3Npb24gICBvcHRpb25hbCAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgIHBhbV9ja19jb25uZWN0b3Iuc28K'
+
+    # File modification :: /mnt/sysimage/etc/pam.d/login
+    base64 --decode <<< "$ks_pam_login" > /mnt/sysimage/etc/pam.d/login
+
+    # File modification :: /mnt/sysimage/etc/securetty
+    touch /mnt/sysimage/etc/securetty
+
+    # File modification :: /mnt/sysimage/etc/sysconfig/qemu-ga
+    sed --in-place '/^BLACKLIST_RPC=/{h;s/=.*/=guest-file-open,guest-file-close,guest-file-read,guest-file-write,guest-file-seek,guest-file-flush,guest-exec,guest-exec-status,guest-set-user-password/};${x;/^$/{s//BLACKLIST_RPC=guest-file-open,guest-file-close,guest-file-read,guest-file-write,guest-file-seek,guest-file-flush,guest-exec,guest-exec-status,guest-set-user-password/;H};x}' /mnt/sysimage/etc/sysconfig/qemu-ga
+
+    # Variable modification :: sysconfig :: SSHD
+    ks_sysconfig_sshd='IyBDb25maWd1cmF0aW9uIGZpbGUgZm9yIHRoZSBzc2hkIHNlcnZpY2UuCgojIFRoZSBzZXJ2ZXIga2V5cyBhcmUgYXV0b21hdGljYWxseSBnZW5lcmF0ZWQgaWYgdGhleSBhcmUgbWlzc2luZy4KIyBUbyBjaGFuZ2UgdGhlIGF1dG9tYXRpYyBjcmVhdGlvbiwgYWRqdXN0IHNzaGQuc2VydmljZSBvcHRpb25zIGZvcgojIGV4YW1wbGUgdXNpbmcgIHN5c3RlbWN0bCBlbmFibGUgc3NoZC1rZXlnZW5AZHNhLnNlcnZpY2UgIHRvIGFsbG93IGNyZWF0aW9uCiMgb2YgRFNBIGtleSBvciAgc3lzdGVtY3RsIG1hc2sgc3NoZC1rZXlnZW5AcnNhLnNlcnZpY2UgIHRvIGRpc2FibGUgUlNBIGtleQojIGNyZWF0aW9uLgoKIyBEbyBub3QgY2hhbmdlIHRoaXMgb3B0aW9uIHVubGVzcyB5b3UgaGF2ZSBoYXJkd2FyZSByYW5kb20KIyBnZW5lcmF0b3IgYW5kIHlvdSBSRUFMTFkga25vdyB3aGF0IHlvdSBhcmUgZG9pbmcKClNTSF9VU0VfU1RST05HX1JORz0wCiMgU1NIX1VTRV9TVFJPTkdfUk5HPTEKCiMgU3lzdGVtLXdpZGUgY3J5cHRvIHBvbGljeToKIyBUbyBvcHQtb3V0LCB1bmNvbW1lbnQgdGhlIGZvbGxvd2luZyBsaW5lCkNSWVBUT19QT0xJQ1k9Jy1vQ2lwaGVycz1jaGFjaGEyMC1wb2x5MTMwNUBvcGVuc3NoLmNvbSxhZXMyNTYtZ2NtQG9wZW5zc2guY29tLGFlczEyOC1nY21Ab3BlbnNzaC5jb20sYWVzMjU2LWN0cixhZXMxOTItY3RyLGFlczEyOC1jdHIgLW9NQUNzPWhtYWMtc2hhMi01MTItZXRtQG9wZW5zc2guY29tLGhtYWMtc2hhMi0yNTYtZXRtQG9wZW5zc2guY29tLHVtYWMtMTI4LWV0bUBvcGVuc3NoLmNvbSxobWFjLXNoYTItNTEyLGhtYWMtc2hhMi0yNTYsdW1hYy0xMjhAb3BlbnNzaC5jb20gLW9HU1NBUElLZXhBbGdvcml0aG1zPWdzcy1nZXgtc2hhMS0sZ3NzLWdyb3VwMTQtc2hhMS0gLW9LZXhBbGdvcml0aG1zPWN1cnZlMjU1MTktc2hhMjU2QGxpYnNzaC5vcmcsZGlmZmllLWhlbGxtYW4tZ3JvdXAtZXhjaGFuZ2Utc2hhMjU2IC1vSG9zdEtleUFsZ29yaXRobXM9cnNhLXNoYTItMjU2LHJzYS1zaGEyLTI1Ni1jZXJ0LXYwMUBvcGVuc3NoLmNvbSxlY2RzYS1zaGEyLW5pc3RwMjU2LGVjZHNhLXNoYTItbmlzdHAyNTYtY2VydC12MDFAb3BlbnNzaC5jb20sZWNkc2Etc2hhMi1uaXN0cDM4NCxlY2RzYS1zaGEyLW5pc3RwMzg0LWNlcnQtdjAxQG9wZW5zc2guY29tLHJzYS1zaGEyLTUxMixyc2Etc2hhMi01MTItY2VydC12MDFAb3BlbnNzaC5jb20sZWNkc2Etc2hhMi1uaXN0cDUyMSxlY2RzYS1zaGEyLW5pc3RwNTIxLWNlcnQtdjAxQG9wZW5zc2guY29tLHNzaC1lZDI1NTE5LHNzaC1lZDI1NTE5LWNlcnQtdjAxQG9wZW5zc2guY29tLHNzaC1yc2Esc3NoLXJzYS1jZXJ0LXYwMUBvcGVuc3NoLmNvbSAtb1B1YmtleUFjY2VwdGVkS2V5VHlwZXM9cnNhLXNoYTItMjU2LHJzYS1zaGEyLTI1Ni1jZXJ0LXYwMUBvcGVuc3NoLmNvbSxlY2RzYS1zaGEyLW5pc3RwMjU2LGVjZHNhLXNoYTItbmlzdHAyNTYtY2VydC12MDFAb3BlbnNzaC5jb20sZWNkc2Etc2hhMi1uaXN0cDM4NCxlY2RzYS1zaGEyLW5pc3RwMzg0LWNlcnQtdjAxQG9wZW5zc2guY29tLHJzYS1zaGEyLTUxMixyc2Etc2hhMi01MTItY2VydC12MDFAb3BlbnNzaC5jb20sZWNkc2Etc2hhMi1uaXN0cDUyMSxlY2RzYS1zaGEyLW5pc3RwNTIxLWNlcnQtdjAxQG9wZW5zc2guY29tLHNzaC1lZDI1NTE5LHNzaC1lZDI1NTE5LWNlcnQtdjAxQG9wZW5zc2guY29tLHNzaC1yc2Esc3NoLXJzYS1jZXJ0LXYwMUBvcGVuc3NoLmNvbSAtb0NBU2lnbmF0dXJlQWxnb3JpdGhtcz1yc2Etc2hhMi0yNTYsZWNkc2Etc2hhMi1uaXN0cDI1NixlY2RzYS1zaGEyLW5pc3RwMzg0LHJzYS1zaGEyLTUxMixlY2RzYS1zaGEyLW5pc3RwNTIxLHNzaC1lZDI1NTE5LHNzaC1yc2EnCg=='
+
+    # File modification :: /mnt/sysimage/etc/sysconfig/sshd
+    base64 --decode <<< "$ks_sysconfig_sshd" > /mnt/sysimage/etc/sysconfig/sshd
+
+    # Variable modification :: OpenSSH :: Configuration
+    ks_openssh_configuration='IyMgc3NoZF9jb25maWcgOjogT3BlblNTSCBjb25maWd1cmF0aW9uIC8vIHN2Yy52cHMuZG9tYWluLnRsZAoKIwojIyBOZXR3b3JrIGRpcmVjdGl2ZXMKCiMgU3BlY2lmaWVzIHdoaWNoIGFkZHJlc3MgZmFtaWx5IHNob3VsZCBiZSB1c2VkIGJ5IHNzaGQoOCkKQWRkcmVzc0ZhbWlseSBpbmV0CgojCiMjIFBhdGggZGlyZWN0aXZlcwoKIyBTcGVjaWZpZXMgdGhlIGZpbGUgdGhhdCBjb250YWlucyB0aGUgcHVibGljIGtleXMgdXNlZCBmb3IgdXNlciBhdXRoZW50aWNhdGlvbgpBdXRob3JpemVkS2V5c0ZpbGUgLnNzaC9hdXRob3JpemVkX2tleXMKCiMgU3BlY2lmaWVzIGEgZmlsZSBjb250YWluaW5nIGEgcHJpdmF0ZSBob3N0IGtleSB1c2VkIGJ5IFNTSApIb3N0S2V5IC9ldGMvc3NoL3NzaF9ob3N0X2VkMjU1MTlfa2V5CgojCiMjIFRpbWluZyBkaXJlY3RpdmVzCgojIFNldHMgdGhlIG51bWJlciBvZiBjbGllbnQgYWxpdmUgbWVzc2FnZXMgd2hpY2ggbWF5IGJlIHNlbnQgd2l0aG91dCBzc2hkKDgpIHJlY2VpdmluZyBhbnkgbWVzc2FnZXMgYmFjayBmcm9tIHRoZSBjbGllbnQKQ2xpZW50QWxpdmVDb3VudE1heCAxOAoKIyBTZXRzIGEgdGltZW91dCBpbnRlcnZhbCBpbiBzZWNvbmRzIGFmdGVyIHdoaWNoIGlmIG5vIGRhdGEgaGFzIGJlZW4gcmVjZWl2ZWQgZnJvbSB0aGUgY2xpZW50LCBzc2hkKDgpIHdpbGwgc2VuZCBhIG1lc3NhZ2UgdGhyb3VnaCB0aGUgZW5jcnlwdGVkIGNoYW5uZWwgdG8gcmVxdWVzdCBhIHJlc3BvbnNlIGZyb20gdGhlIGNsaWVudApDbGllbnRBbGl2ZUludGVydmFsIDUKCiMgVGhlIHNlcnZlciBkaXNjb25uZWN0cyBhZnRlciB0aGUgc3BlY2lmaWVkIHRpbWUgaWYgdGhlIHVzZXIgaGFzIG5vdCBzdWNjZXNzZnVsbHkgbG9nZ2VkIGluCkxvZ2luR3JhY2VUaW1lIDQ1CgojIFNwZWNpZmllcyB0aGUgbWF4aW11bSBudW1iZXIgb2YgY29uY3VycmVudCB1bmF1dGhlbnRpY2F0ZWQgY29ubmVjdGlvbnMgdG8gdGhlIFNTSCBkYWVtb24KTWF4U3RhcnR1cHMgNToxMDo4MAoKIwojIyBTZWN1cml0eSBzdHJlbmd0aGVuaW5nIGRpcmVjdGl2ZXMKCiMgcHJvaGliaXQgYWxsIFRDUCBmb3J3YXJkaW5nIHJlcXVlc3RzClBlcm1pdE9wZW4gbm9uZQoKIwojIyBNaXNjZWxsZWFub3VzIGRpcmVjdGl2ZXMKCiMgU3BlY2lmaWVzIHdoYXQgZW52aXJvbm1lbnQgdmFyaWFibGVzIHNlbnQgYnkgdGhlIGNsaWVudCB3aWxsIGJlIGNvcGllZCBpbnRvIHRoZSBzZXNzaW9uJ3MgZW52aXJvbig3KQpBY2NlcHRFbnYgTEFORyBMQ19DVFlQRSBMQ19OVU1FUklDIExDX1RJTUUgTENfQ09MTEFURSBMQ19NT05FVEFSWSBMQ19NRVNTQUdFUwpBY2NlcHRFbnYgTENfUEFQRVIgTENfTkFNRSBMQ19BRERSRVNTIExDX1RFTEVQSE9ORSBMQ19NRUFTVVJFTUVOVApBY2NlcHRFbnYgTENfSURFTlRJRklDQVRJT04gTENfQUxMIExBTkdVQUdFCkFjY2VwdEVudiBYTU9ESUZJRVJTCgojIFNwZWNpZmllcyB3aGV0aGVyIHNzaGQoOCkgc2hvdWxkIHByaW50IHRoZSBkYXRlIGFuZCB0aW1lIG9mIHRoZSBsYXN0IHVzZXIgbG9naW4gd2hlbiBhIHVzZXIgbG9ncyBpbiBpbnRlcmFjdGl2ZWx5ClByaW50TGFzdExvZyBubwoKIyBTcGVjaWZpZXMgd2hldGhlciBzc2hkKDgpIHNob3VsZCBwcmludCAvZXRjL21vdGQgd2hlbiBhIHVzZXIgbG9ncyBpbiBpbnRlcmFjdGl2ZWx5ClByaW50TW90ZCBubwoKIyBFeHRlcm5hbCBzdWJzeXN0ZW0gOjogc2Z0cApTdWJzeXN0ZW0gc2Z0cCAvdXNyL2xpYmV4ZWMvb3BlbnNzaC9zZnRwLXNlcnZlcgoKIyBHaXZlcyB0aGUgZmFjaWxpdHkgY29kZSB0aGF0IGlzIHVzZWQgd2hlbiBsb2dnaW5nIG1lc3NhZ2VzIGZyb20gc3NoZCg4KQpTeXNsb2dGYWNpbGl0eSBBVVRIUFJJVgoKIyBFbmFibGUgdGhlIHBsdWdnYWJsZSBhdXRoZW50aWNhdGlvbiBtb2R1bGUgaW50ZXJmYWNlClVzZVBBTSB5ZXMKCiMKIyMgQXV0aGVudGljYXRpb24gZGlyZWN0aXZlcwoKIyBTcGVjaWZpZXMgd2hldGhlciBjaGFsbGVuZ2UtcmVzcG9uc2UgYXV0aGVudGljYXRpb24gaXMgYWxsb3dlZApDaGFsbGVuZ2VSZXNwb25zZUF1dGhlbnRpY2F0aW9uIG5vCgojIERpc2FibGUgcGFzc3dvcmQgdmFsaWRhdGlvbiB2aWEgYW55IGFkZGl0aW9uYWwgbG9jYWwgbWVjaGFuaXNtIHN1Y2ggYXMgL2V0Yy9wYXNzd2QgaWYgcGFzc3dvcmQgYXV0aGVudGljYXRpb24gdGhyb3VnaCBLZXJiZXJvcyBmYWlscwpLZXJiZXJvc09yTG9jYWxQYXNzd2Qgbm8KCiMgU3BlY2lmaWVzIHRoZSBtYXhpbXVtIG51bWJlciBvZiBhdXRoZW50aWNhdGlvbiBhdHRlbXB0cyBwZXJtaXR0ZWQgcGVyIGNvbm5lY3Rpb24KTWF4QXV0aFRyaWVzIDMKCiMgU3BlY2lmaWVzIHdoZXRoZXIgcGFzc3dvcmQgYXV0aGVudGljYXRpb24gaXMgYWxsb3dlZApQYXNzd29yZEF1dGhlbnRpY2F0aW9uIG5vCgojIFNwZWNpZmllcyB3aGV0aGVyIHJvb3QgY2FuIGxvZyBpbiB1c2luZyBzc2goMSkKUGVybWl0Um9vdExvZ2luIG5vCgojCiMjIEF1dGhvcml6YXRpb24gZGlyZWN0aXZlcwoKIyBMb2dpbiBpcyBhbGxvd2VkIG9ubHkgZm9yIHVzZXIgbmFtZXMgdGhhdCBtYXRjaCBvbmUgb2YgdGhlIHBhdHRlcm5zIHNwZWNpZmllZApBbGxvd1VzZXJzIG9iZnVzY2F0ZWQK'
+
+    # File modification :: /mnt/sysimage/etc/ssh/sshd_config
+    base64 --decode <<< "$ks_openssh_configuration" > /mnt/sysimage/etc/ssh/sshd_config
+
+    # File modification :: /mnt/sysimage/etc/domain.tld
+    touch /mnt/sysimage/etc/domain.tld
+%end
+
+# Action :: Post installation :: /bin/bash // Cleanup artifacts left by Anaconda
+%post --interpreter=/bin/bash --nochroot
+    # File modification :: /mnt/sysimage/tmp/ks-script-*
+    rm --force --verbose /mnt/sysimage/tmp/ks-script-*
+%end
+
+#
+## Postprocess :: Phase 1
+
+# Define :: Reboot after installation has successfully completed
+reboot

@@ -1,0 +1,77 @@
+#!/usr/bin/env bash
+## generate_as :: Generate :: Automated script
+
+#
+## Initialization :: Variables :: Static
+
+# Automated script :: Instances
+readonly sr_as_instances=(aanp-latest-w9f-efi)
+
+#
+## Initialization :: Variables :: Dynamic
+
+# Variable modification :: Script :: Short name
+readonly sr_script_sn="$(basename "${BASH_SOURCE[0]}")"
+
+# Variable modification :: Script :: Resolved absolute path name
+readonly sr_script_rapn="$(dirname "$(realpath "${BASH_SOURCE[0]}")")"
+
+#
+## Preprocess :: Phase 0
+
+# Loop :: Array :: Automated script :: Templates
+for sr_as_template in "${sr_as_instances[@]}"; do
+    # Validate :: Automated script template existence
+    if [[ ! -e "$sr_script_rapn/../http/automated_script/$sr_as_template.tmpl" ]]; then
+        # Notify :: Validation failure
+        printf '%s\n' "FAIL :: Validation :: Template existence :: $sr_script_rapn/../http/automated_script/$sr_as_template.tmpl :: $sr_script_sn/$LINENO"
+
+        # Action :: Exit ungracefully
+        exit 1
+    fi
+
+    # Variable modification :: sr_as_template
+    unset sr_as_template
+done
+
+#
+## Preprocess :: Phase 1
+
+# Variable modification :: Secret :: Obfuscated Obfuscated :: OpenSSH :: Public key
+readonly secret_al_openssh_pk="$(pass show personal/ssh/ed25519-obfucasted/identity.pub 2> /dev/null)"
+
+# Variable modification :: Secret :: obfuscated :: OpenSSH :: Private key :: Base64 encoded
+readonly secret_obfuscated_openssh_pk_be="$(pass show obfuscated.domain.tld/ssh/ed25519-obfuscated/identity 2> /dev/null | base64)"
+
+#
+## Preprocess :: Phase 2
+
+# Loop :: Secrets
+for secret in $(printf '%s\n' secret_al_openssh_pk secret_obfuscated_openssh_pk_be); do
+    # Validate :: Secret content // Cannot be empty
+    if [[ -z "${!secret}" ]]; then
+        # Notify :: Empty secret
+        printf '%s\n' "FAIL :: Secret not available :: ${secret} :: $sr_script_sn/$LINENO"
+
+        # Action :: Exit ungracefully
+        exit 1
+    fi
+done
+
+#
+## Main :: Phase 0
+
+# Loop :: Array :: Automated script :: Templates
+for sr_as_template in "${sr_as_instances[@]}"; do
+    # File modification :: Automated script
+    sed -e "s/@@secret_al_openssh_pk@@/$secret_al_openssh_pk/g" -e "s/@@secret_obfuscated_openssh_pk_be@@/$secret_obfuscated_openssh_pk_be/g" "$sr_script_rapn/../http/automated_script/$sr_as_template.tmpl" > "$sr_script_rapn/../http/automated_script/$sr_as_template" || {
+        # Notify :: Execution failure
+        printf '%s\n' "FAIL :: sed :: $sr_script_rapn/../http/automated_script/$sr_as_template.tmpl :: $sr_script_sn/$LINENO"
+
+        # Action :: Exit ungracefully
+        exit 1
+    }
+
+    # Variable modification :: sr_as_template
+    unset sr_as_template
+done

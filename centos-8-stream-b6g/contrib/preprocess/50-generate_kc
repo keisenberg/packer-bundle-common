@@ -1,0 +1,83 @@
+#!/usr/bin/env bash
+## generate_kc :: Generate :: Kickstart configuration
+
+#
+## Initialization :: Variables :: Static
+
+# Kickstart :: Instances
+readonly sr_kickstart_instances=(centos-8-stream-b6g-bios centos-8-stream-b6g-efi)
+
+#
+## Initialization :: Variables :: Dynamic
+
+# Variable modification :: Script :: Short name
+readonly sr_script_sn="$(basename "${BASH_SOURCE[0]}")"
+
+# Variable modification :: Script :: Resolved absolute path name
+readonly sr_script_rapn="$(dirname "$(realpath "${BASH_SOURCE[0]}")")"
+
+#
+## Preprocess :: Phase 0
+
+# Loop :: Array :: Kickstart :: Templates
+for sr_kickstart_template in "${sr_kickstart_instances[@]}"; do
+    # Validate :: Kickstart template existence
+    if [[ ! -e "$sr_script_rapn/../http/kickstart/$sr_kickstart_template.cfg.tmpl" ]]; then
+        # Notify :: Validation failure
+        printf '%s\n' "FAIL :: Validation :: Template existence :: $sr_script_rapn/../http/kickstart/$sr_kickstart_template.cfg.tmpl :: $sr_script_sn/$LINENO"
+
+        # Action :: Exit ungracefully
+        exit 1
+    fi
+
+    # Variable modification :: sr_kickstart_template
+    unset sr_kickstart_template
+done
+
+#
+## Preprocess :: Phase 1
+
+# Variable modification :: Secret :: LUKS :: Encryption key
+readonly secret_luks_ek="$(pass show svc.vps.domain.tld/common/luks/encryption-key 2> /dev/null)"
+
+# Variable modification :: Secret :: Bootloader :: GRUB2 :: Crypted
+readonly secret_bootloader_grub2_crypted="$(pass show svc.vps.domain.tld/common/bootloader/grub2-crypted 2> /dev/null)"
+
+# Variable modification :: Secret :: User :: root :: Crypted
+readonly secret_user_root_crypted="$(pass show svc.vps.domain.tld/common/user/root-crypted 2> /dev/null)"
+
+# Variable modification :: Secret :: User :: obfuscated :: Crypted
+readonly secret_user_obfuscated_crypted="$(pass show svc.vps.domain.tld/common/user/obfuscated-crypted 2> /dev/null)"
+
+#
+## Preprocess :: Phase 2
+
+# Loop :: Secrets
+for secret in $(printf '%s\n' secret_luks_ek secret_bootloader_grub2_crypted secret_user_root_crypted secret_user_obfuscated_crypted); do
+    # Validate :: Secret content // Cannot be empty
+    if [[ -z "${!secret}" ]]; then
+        # Notify :: Empty secret
+        printf '%s\n' "FAIL :: Secret not available :: ${secret} :: $sr_script_sn/$LINENO"
+
+        # Action :: Exit ungracefully
+        exit 1
+    fi
+done
+
+#
+## Main :: Phase 0
+
+# Loop :: Array :: Kickstart :: Templates
+for sr_kickstart_template in "${sr_kickstart_instances[@]}"; do
+    # File modification :: $sr_script_rapn/../http/kickstart/$sr_kickstart_template.cfg
+    sed -e "s/@@secret_luks_ek@@/$secret_luks_ek/g" -e "s/@@secret_bootloader_grub2_crypted@@/$secret_bootloader_grub2_crypted/g" -e "s/@@secret_user_root_crypted@@/$secret_user_root_crypted/g" -e "s/@@secret_user_obfuscated_crypted@@/$secret_user_obfuscated_crypted/g" "$sr_script_rapn/../http/kickstart/$sr_kickstart_template.cfg.tmpl" > "$sr_script_rapn/../http/kickstart/$sr_kickstart_template.cfg" || {
+        # Notify :: Execution failure
+        printf '%s\n' "FAIL :: sed :: $sr_script_rapn/../http/kickstart/$sr_kickstart_template.cfg.tmpl :: $sr_script_sn/$LINENO"
+
+        # Action :: Exit ungracefully
+        exit 1
+    }
+
+    # Variable modification :: sr_kickstart_template
+    unset sr_kickstart_template
+done
